@@ -7,6 +7,16 @@
 #include <cassert>
 #include <sys/mman.h>
 
+static m61_statistics gstats {
+    .nactive = 0,         // # active allocations
+    .active_size = 0,     // # bytes in active allocations
+    .ntotal = 0,          // # total allocations
+    .total_size = 0,      // # bytes in total allocations
+    .nfail = 0,           // # failed allocation attempts
+    .fail_size = 0,       // # bytes in failed alloc attempts
+    .heap_min = 0,                 // smallest allocated addr
+    .heap_max = 0,                 // largest allocated addr
+};
 
 struct m61_memory_buffer {
     char* buffer;
@@ -46,14 +56,36 @@ m61_memory_buffer::~m61_memory_buffer() {
 void* m61_malloc(size_t sz, const char* file, int line) {
     (void) file, (void) line;   // avoid uninitialized variable warnings
     // Your code here.
-    if (default_buffer.pos + sz > default_buffer.size) {
+    if (sz > default_buffer.pos - default_buffer.size) {
         // Not enough space left in default buffer for allocation
+        ++gstats.nfail;
+        gstats.fail_size = sz;
+        return nullptr;
+    }
+
+    ++gstats.ntotal;
+    if (sz == 0) {
         return nullptr;
     }
 
     // Otherwise there is enough space; claim the next `sz` bytes
+    ++gstats.nactive;
+    gstats.total_size += sz;
+    gstats.active_size += sz;
     void* ptr = &default_buffer.buffer[default_buffer.pos];
-    default_buffer.pos += sz;
+    size_t offset = sz + (16 - sz % 16);
+    default_buffer.pos += offset;
+
+    uintptr_t heap_first = (uintptr_t)ptr;
+    uintptr_t heap_last = (uintptr_t)ptr + offset;
+    if (!gstats.heap_min || heap_first < gstats.heap_min) {
+        gstats.heap_min = heap_first; 
+    }
+
+    if (!gstats.heap_max || heap_last > gstats.heap_max) {
+        gstats.heap_max = heap_last;
+    }
+
     return ptr;
 }
 
@@ -68,6 +100,11 @@ void m61_free(void* ptr, const char* file, int line) {
     // avoid uninitialized variable warnings
     (void) ptr, (void) file, (void) line;
     // Your code here. The handout code does nothing!
+    if (!ptr) {
+        return;
+    }
+
+    --gstats.nactive;
 }
 
 
@@ -80,6 +117,16 @@ void m61_free(void* ptr, const char* file, int line) {
 
 void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
     // Your code here (not needed for first tests).
+    if (count == 0) {
+        ++gstats.ntotal;
+        return nullptr;
+    }
+
+    if (sz > (default_buffer.pos - default_buffer.size) / count) {
+        ++gstats.nfail;
+        gstats.fail_size = sz * count;
+        return nullptr;
+    }
     void* ptr = m61_malloc(count * sz, file, line);
     if (ptr) {
         memset(ptr, 0, count * sz);
@@ -94,8 +141,7 @@ void* m61_calloc(size_t count, size_t sz, const char* file, int line) {
 m61_statistics m61_get_statistics() {
     // Your code here.
     // The handout code sets all statistics to enormous numbers.
-    m61_statistics stats;
-    memset(&stats, 255, sizeof(m61_statistics));
+    m61_statistics stats = gstats;
     return stats;
 }
 
