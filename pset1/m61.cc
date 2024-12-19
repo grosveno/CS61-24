@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cinttypes>
 #include <cassert>
+#include <map>
 #include <sys/mman.h>
 
 static m61_statistics gstats {
@@ -17,6 +18,9 @@ static m61_statistics gstats {
     .heap_min = 0,                 // smallest allocated addr
     .heap_max = 0,                 // largest allocated addr
 };
+
+static std::map<void*, size_t> freed_allocation;
+static std::map<void*, size_t> active_allocation;
 
 struct m61_memory_buffer {
     char* buffer;
@@ -44,7 +48,15 @@ m61_memory_buffer::~m61_memory_buffer() {
     munmap(this->buffer, this->size);
 }
 
-
+static void* m61_find_free_space(size_t sz) {
+    // do we have a freed allocation that will work?
+    for (auto& it : freed_allocation) {
+        if (it.second >= sz) {
+            return it.first;
+        }
+    }
+    return nullptr;
+}
 
 
 /// m61_malloc(sz, file, line)
@@ -71,21 +83,30 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     // Otherwise there is enough space; claim the next `sz` bytes
     ++gstats.nactive;
     gstats.total_size += sz;
-    gstats.active_size += sz;
-    void* ptr = &default_buffer.buffer[default_buffer.pos];
-    size_t offset = sz + (16 - sz % 16);
-    default_buffer.pos += offset;
+    void* ptr = m61_find_free_space(sz);
+    size_t allocate_sz = 0;
+    if (!ptr) {
+        // if not exists free place
+        ptr = &default_buffer.buffer[default_buffer.pos];
+        allocate_sz = sz + (16 - sz % 16);
+        //heap increases
+        default_buffer.pos += allocate_sz;
+        uintptr_t heap_first = (uintptr_t)ptr;
+        uintptr_t heap_last = (uintptr_t)ptr + allocate_sz;
+        if (!gstats.heap_min || heap_first < gstats.heap_min) {
+            gstats.heap_min = heap_first; 
+        }
 
-    uintptr_t heap_first = (uintptr_t)ptr;
-    uintptr_t heap_last = (uintptr_t)ptr + offset;
-    if (!gstats.heap_min || heap_first < gstats.heap_min) {
-        gstats.heap_min = heap_first; 
+        if (!gstats.heap_max || heap_last > gstats.heap_max) {
+            gstats.heap_max = heap_last;
+        }
+    } else {
+        // if exists free place
+        allocate_sz = freed_allocation[ptr];
+        freed_allocation.erase(ptr);
     }
-
-    if (!gstats.heap_max || heap_last > gstats.heap_max) {
-        gstats.heap_max = heap_last;
-    }
-
+    // update active allocation map
+    active_allocation.insert({ptr, allocate_sz});
     return ptr;
 }
 
@@ -104,6 +125,10 @@ void m61_free(void* ptr, const char* file, int line) {
         return;
     }
 
+    // update freed allocation place
+    freed_allocation.insert({ptr, active_allocation[ptr]});
+    // update active allocation place
+    active_allocation.erase(ptr);
     --gstats.nactive;
 }
 
