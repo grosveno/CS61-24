@@ -67,8 +67,11 @@ static void* m61_find_free_space(size_t sz) {
 
 void* m61_malloc(size_t sz, const char* file, int line) {
     (void) file, (void) line;   // avoid uninitialized variable warnings
-    // Your code here.
-    if (sz > default_buffer.pos - default_buffer.size) {
+    // first, try finding free space
+    void* ptr = m61_find_free_space(sz);
+
+    // if not finding free space and have no extra space in buffer, fail
+    if (!ptr && sz > default_buffer.pos - default_buffer.size) {
         // Not enough space left in default buffer for allocation
         ++gstats.nfail;
         gstats.fail_size = sz;
@@ -83,7 +86,6 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     // Otherwise there is enough space; claim the next `sz` bytes
     ++gstats.nactive;
     gstats.total_size += sz;
-    void* ptr = m61_find_free_space(sz);
     size_t allocate_sz = 0;
     if (!ptr) {
         // if not exists free place
@@ -107,6 +109,8 @@ void* m61_malloc(size_t sz, const char* file, int line) {
     }
     // update active allocation map
     active_allocation.insert({ptr, allocate_sz});
+    // update active space
+    gstats.active_size += allocate_sz;
     return ptr;
 }
 
@@ -126,10 +130,12 @@ void m61_free(void* ptr, const char* file, int line) {
     }
 
     // update freed allocation place
-    freed_allocation.insert({ptr, active_allocation[ptr]});
+    size_t free_sz = active_allocation[ptr];
+    freed_allocation.insert({ptr, free_sz});
     // update active allocation place
     active_allocation.erase(ptr);
     --gstats.nactive;
+    gstats.active_size -= free_sz;
 }
 
 
